@@ -16,6 +16,7 @@
 #include "mkdir.h"
 #include "parse-helpers.h"
 #include "parse-util.h"
+#include "percent-util.h"
 #include "process-util.h"
 #include "random-util.h"
 #include "rm-rf.h"
@@ -830,7 +831,7 @@ static void compile_pattern_fields(
         memcpy(ret->sha256sum, i->metadata.sha256sum, sizeof(ret->sha256sum));
 }
 
-static int helper_on_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
+static int callout_on_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
         const char *name = userdata;
         int code;
 
@@ -863,7 +864,7 @@ struct notify_userdata {
         void* userdata;
 };
 
-static int helper_on_notify(sd_event_source *s, int fd, uint32_t revents, void *userdata) {
+static int callout_on_notify(sd_event_source *s, int fd, uint32_t revents, void *userdata) {
         char buf[NOTIFY_BUFFER_MAX+1];
         struct iovec iovec = {
                 .iov_base = buf,
@@ -915,11 +916,12 @@ static int helper_on_notify(sd_event_source *s, int fd, uint32_t revents, void *
 
         truncate_nl(progress_str);
 
-        r = safe_atou(progress_str, &progress);
-        if (r < 0 || progress > 100) {
+        r = parse_percent(progress_str); // str contains a `%` symbol here
+        if (r < 0 || r > 100) {
                 log_warning("Got invalid percent value '%s', ignoring.", progress_str);
                 return 0;
         }
+        progress = (unsigned int)r;
 
         return ctx->callback(ctx->transfer, ctx->instance, progress, ctx->userdata);
 }
@@ -987,7 +989,7 @@ static int run_callout(
         userdata->pid = pid;
 
         /* Quit the loop w/ when child process exits */
-        r = sd_event_add_child(event, &exit_source, pid, WEXITED, helper_on_exit, (void*) name);
+        r = sd_event_add_child(event, &exit_source, pid, WEXITED, callout_on_exit, (void*) name);
         if (r < 0)
                 return r;
 
@@ -997,7 +999,7 @@ static int run_callout(
         TAKE_PID(pid);
 
         /* Propagate sd_notify calls */
-        r = sd_event_add_io(event, &notify_source, fd, EPOLLIN, helper_on_notify, userdata);
+        r = sd_event_add_io(event, &notify_source, fd, EPOLLIN, callout_on_notify, userdata);
         if (r < 0)
                 return r;
 
