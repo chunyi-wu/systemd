@@ -355,10 +355,6 @@ static int job_on_exit(sd_event_source *s, const siginfo_t *si, void *userdata) 
         return 0;
 }
 
-static inline const char* sysupdate_binary_path(void) {
-        return secure_getenv("SYSTEMD_SYSUPDATE_PATH") ?: SYSTEMD_SYSUPDATE_PATH;
-}
-
 static int target_get_argument(Target *t, char **ret) {
         _cleanup_free_ char *target_arg = NULL;
 
@@ -407,7 +403,7 @@ static int job_start(Job *j) {
 
                 _cleanup_free_ char *target_arg = NULL;
                 const char *cmd[] = {
-                        "systemd-sysupdate",
+                        SYSTEMD_SYSUPDATE_PATH,
                         "--json=short",
                         NULL, /* maybe --verify=no */
                         NULL, /* maybe --component=, --root=, or --image= */
@@ -481,7 +477,7 @@ static int job_start(Job *j) {
                         log_debug("Spawning worker for job %" PRIu64 ": %s", j->id, s);
                 }
 
-                r = invoke_callout_binary(sysupdate_binary_path(), (char *const *) cmd);
+                r = invoke_callout_binary(cmd[0], (char *const*) cmd);
                 log_error_errno(r, "Failed to execute systemd-sysupdate: %m");
                 _exit(EXIT_FAILURE);
         }
@@ -756,7 +752,7 @@ static int sysupdate_run_simple(JsonVariant **ret, ...) {
                 char *arg;
                 _cleanup_strv_free_ char **args = NULL;
 
-                if (strv_extend(&args, "systemd-sysupdate") < 0) {
+                if (strv_extend(&args, SYSTEMD_SYSUPDATE_PATH) < 0) {
                         log_oom();
                         _exit(EXIT_FAILURE);
                 }
@@ -786,7 +782,7 @@ static int sysupdate_run_simple(JsonVariant **ret, ...) {
                         log_debug("Spawning sysupdate: %s", s);
                 }
 
-                r = invoke_callout_binary(sysupdate_binary_path(), args);
+                r = invoke_callout_binary(args[0], (char *const*)args);
                 log_error_errno(r, "Failed to execute systemd-sysupdate: %m");
                 _exit(EXIT_FAILURE);
         }
