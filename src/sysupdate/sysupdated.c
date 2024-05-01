@@ -80,6 +80,16 @@ typedef enum JobType {
         _JOB_TYPE_INVALID = -EINVAL,
 } JobType;
 
+typedef enum JobStatus {
+        JOB_SPACING,
+        JOB_UPDATING,
+        JOB_INSTALLING,
+        JOB_INSTALLED,
+        JOB_UNKNOWN,
+        _JOB_STATUS_MAX,
+        _JOB_STATUS_INVALID = -EINVAL,
+} JobStatus;
+
 typedef struct Job Job;
 
 typedef int (*JobComplete)(sd_bus_message *, const Job *, JsonVariant *, sd_bus_error *);
@@ -96,6 +106,7 @@ struct Job {
         char *version; /* Passed into sysupdate for JOB_DESCRIBE and JOB_UPDATE */
 
         unsigned progress_percent;
+        JobStatus status;
 
         sd_event_source *child;
         int stdout_fd;
@@ -289,6 +300,7 @@ static void job_on_progress(Job *j, char *b) {
 }
 
 static void job_on_version(Job *j, char *version) {
+
         if (!version) {
                 log_oom_warning();
                 return;
@@ -296,6 +308,31 @@ static void job_on_version(Job *j, char *version) {
         j->version = TAKE_PTR(version);
 
         log_debug("Got version from job %" PRIu64 ": %s ", j->id, j->version);
+}
+
+static void job_on_status(Job *j, char *msg) {
+
+        // TODO: maybe just return status code in sysupdate instead
+        if (find_line_startswith(msg, "Making room")) {
+                j->status = JOB_SPACING;
+        }
+        else if (find_line_startswith(msg, "Updating")) {
+                j->status = JOB_UPDATING;
+        }
+        else if (find_line_startswith(msg, "Installing")) {
+                j->status = JOB_INSTALLING;
+        }
+        else if (find_line_startswith(msg, "Installed")) {
+                j->status = JOB_INSTALLED;
+        }
+        else {
+                j->status = JOB_UNKNOWN;
+        }
+        (void) sd_bus_emit_properties_changed(j->manager->bus, j->object_path,
+                                              "org.freedesktop.sysupdate1.Job",
+                                              "Status", NULL);
+
+        log_debug("Got status from job %" PRIu64 ": %u ", j->id, (unsigned int)j->status);
 }
 
 static int job_on_exit(sd_event_source *s, const siginfo_t *si, void *userdata) {
@@ -630,6 +667,7 @@ static const sd_bus_vtable job_vtable[] = {
         SD_BUS_PROPERTY("Type", "s", job_property_get_type, offsetof(Job, type), SD_BUS_VTABLE_PROPERTY_CONST),
         SD_BUS_PROPERTY("Offline", "b", NULL, offsetof(Job, offline), SD_BUS_VTABLE_PROPERTY_CONST),
         SD_BUS_PROPERTY("Progress", "u", NULL, offsetof(Job, progress_percent), SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
+        SD_BUS_PROPERTY("Status", "u", NULL, offsetof(Job, status), SD_BUS_VTABLE_PROPERTY_EMITS_CHANGE),
 
         SD_BUS_METHOD("Cancel", NULL, NULL, job_method_cancel, SD_BUS_VTABLE_UNPRIVILEGED),
 
@@ -1139,6 +1177,9 @@ static int target_method_update_finished_early(
         /* Called when job finishes w/ a successful exit code, but before any work begins.
          * This happens when there is no candidate (i.e. we're already up-to-date), or
          * specified update is already installed. */
+
+
+
         return sd_bus_error_set_errno(error, -EALREADY);
 }
 
@@ -1500,6 +1541,11 @@ static int manager_on_notify(sd_event_source *s, int fd, uint32_t revents, void 
         /* Should come last, since this might actually detach the job */
         if (find_line_startswith(buf, "READY=1"))
                 job_on_ready(j);
+
+        /* least important, status message only */
+        p = find_line_startswith(buf, "STATUS=");
+        if (p)
+                job_on_status(j, strdupcspn(p, "\n"));
 
         return 0;
 }

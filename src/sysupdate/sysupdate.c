@@ -830,7 +830,7 @@ static int context_apply(
         (void) sd_notifyf(false,
                           "READY=1\n" /* Tell sysupdated that we've started working */
                           "X_UPDATE_VERSION=%s\n"
-                          "STATUS=Making room for '%s'.", us->version, us->version);
+                          "STATUS=Making room for '%s'.\n", us->version, us->version);
 
         /* Let's make some room. We make sure for each transfer we have one free space to fill. While
          * removing stuff we'll protect the version we are trying to acquire. Why that? Maybe an earlier
@@ -869,6 +869,9 @@ static int context_apply(
                 if (r < 0)
                         return r;
         }
+
+        (void) sd_notifyf(false,
+                          "STATUS=Installed '%s'.\n", us->version);
 
         log_info("%s Successfully installed update '%s'.", special_glyph(SPECIAL_GLYPH_SPARKLES), us->version);
 

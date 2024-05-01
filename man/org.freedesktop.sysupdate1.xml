@@ -300,6 +300,7 @@ node /org/freedesktop/sysupdate1/job/_1 {
       @org.freedesktop.DBus.Property.EmitsChangedSignal("const")
       readonly b Offline = ...;
       readonly u Progress = ...;
+      readonly u Status = ...;
   };
   interface org.freedesktop.DBus.Peer { ... };
   interface org.freedesktop.DBus.Introspectable { ... };
@@ -357,6 +358,11 @@ node /org/freedesktop/sysupdate1/job/_1 {
       <para>The <varname>Progress</varname> property exposes the current progress of the job as a value
       between 0 and 100. It is only available for <literal>update</literal> jobs; for all other jobs
       it is always 0.</para>
+
+      <para>The <varname>Status</varname> property exposes the current status of the job as an enum
+      value representing status: 0 = spacing, 1 = updating, 2 = installing, 3 = finished and
+      4 = unknown. It is only available for <literal>update</literal> jobs; for all other jobs this
+      value is undefined.</para>
     </refsect2>
 
     <refsect2>
@@ -428,8 +434,9 @@ node /org/freedesktop/sysupdate1/job/_1 {
       <para><function>Cancel()</function>,
       <varname>Id</varname>,
       <varname>Type</varname>,
-      <varname>Offline</varname>, and
-      <varname>Progress</varname> were added in version 256.</para>
+      <varname>Offline</varname>,
+      <varname>Progress</varname>, and
+      <varname>Status</varname> were added in version 256.</para>
     </refsect2>
   </refsect1>
 </refentry>
