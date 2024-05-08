@@ -1622,11 +1622,14 @@ static int manager_enumerate_image_class(Manager *m, TargetClass class) {
         Image *image;
         int r;
 
+        log_warning (" ? enumerating target = %d", (int)class);
+
         images = hashmap_new(&image_hash_ops);
         if (!images)
                 return log_oom();
 
         r = image_discover((ImageClass) class, NULL, images);
+        log_warning (" ? r = %d", r);
         if (r < 0)
                 return r;
 
@@ -1637,6 +1640,8 @@ static int manager_enumerate_image_class(Manager *m, TargetClass class) {
                 if (IMAGE_IS_HOST(image))
                         continue; /* We already enroll the host ourselves */
 
+                log_warning (" ? image = `%s` (%s)", image->name, image->path);
+
                 r = target_new(m, class, image->name, image->path, &t);
                 if (r < 0)
                         return r;
@@ -1646,6 +1651,7 @@ static int manager_enumerate_image_class(Manager *m, TargetClass class) {
                 if (r < 0)
                         return r;
                 if (!have) {
+                        log_warning (" ? skipping `%s`", image->name);
                         log_debug("Skipping %s because it has no default component", image->path);
                         continue;
                 }
