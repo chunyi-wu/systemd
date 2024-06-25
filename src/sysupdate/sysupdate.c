@@ -47,12 +47,14 @@ static bool arg_reboot = false;
 static char *arg_component = NULL;
 static int arg_verify = -1;
 static ImagePolicy *arg_image_policy = NULL;
+static char *arg_major_version = NULL;
 
 STATIC_DESTRUCTOR_REGISTER(arg_definitions, freep);
 STATIC_DESTRUCTOR_REGISTER(arg_root, freep);
 STATIC_DESTRUCTOR_REGISTER(arg_image, freep);
 STATIC_DESTRUCTOR_REGISTER(arg_component, freep);
 STATIC_DESTRUCTOR_REGISTER(arg_image_policy, image_policy_freep);
+STATIC_DESTRUCTOR_REGISTER(arg_major_version, freep);
 
 typedef struct Context {
         Transfer **transfers;
@@ -211,7 +213,6 @@ static int context_load_available_instances(Context *c) {
 static int context_discover_update_sets_by_flag(Context *c, UpdateSetFlags flags) {
         _cleanup_free_ Instance **cursor_instances = NULL;
         _cleanup_free_ char *boundary = NULL;
-        bool newest_found = false;
         int r;
 
         assert(c);
@@ -302,7 +303,6 @@ static int context_discover_update_sets_by_flag(Context *c, UpdateSetFlags flags
                         /* We only store the instances we found first, but we remember we also found it again */
                         c->update_sets[i]->flags |= flags | extra_flags;
                         exists = true;
-                        newest_found = true;
                         break;
                 }
 
@@ -318,7 +318,7 @@ static int context_discover_update_sets_by_flag(Context *c, UpdateSetFlags flags
                         return log_oom();
 
                 *us = (UpdateSet) {
-                        .flags = flags | (newest_found ? 0 : UPDATE_NEWEST) | extra_flags,
+                        .flags = flags | extra_flags,
                         .version = TAKE_PTR(cursor),
                         .instances = TAKE_PTR(cursor_instances),
                         .n_instances = c->n_transfers,
@@ -326,20 +326,11 @@ static int context_discover_update_sets_by_flag(Context *c, UpdateSetFlags flags
 
                 c->update_sets[c->n_update_sets++] = us;
 
-                newest_found = true;
-
                 /* Remember which one is the newest installed */
                 if ((us->flags & (UPDATE_NEWEST|UPDATE_INSTALLED)) == (UPDATE_NEWEST|UPDATE_INSTALLED))
                         c->newest_installed = us;
 
-                /* Remember which is the newest non-obsolete, available (and not installed) version, which we declare the "candidate" */
-                if ((us->flags & (UPDATE_NEWEST|UPDATE_INSTALLED|UPDATE_AVAILABLE|UPDATE_OBSOLETE)) == (UPDATE_NEWEST|UPDATE_AVAILABLE))
-                        c->candidate = us;
         }
-
-        /* Newest installed is newer than or equal to candidate? Then suppress the candidate */
-        if (c->newest_installed && c->candidate && strverscmp_improved(c->newest_installed->version, c->candidate->version) >= 0)
-                c->candidate = NULL;
 
         return 0;
 }
@@ -362,6 +353,42 @@ static int context_discover_update_sets(Context *c) {
                 return r;
 
         typesafe_qsort(c->update_sets, c->n_update_sets, update_set_cmp);
+        return 0;
+}
+
+static int context_select_candidate_from_update_sets(Context *c, const char *version_prefix) {
+
+        /* If the `version_prefix` is specified, pick the latest within the candidates who has the prefix
+         * in the beginning of it's version (`@v`). This candidate might not be the 'newest' among all the
+         * versions. For example, given `version_prefix='46'`:
+         *   - 47.1 (newest)
+         *   - 47.0
+         *   - 46.1 (candidate)
+         *   - 46.0 (installed)
+         */
+
+        assert(c);
+
+        c->candidate = NULL;
+        for (size_t i = 0; i < c->n_update_sets; i++) {
+                UpdateSet *us = c->update_sets[i];
+
+                /* No candidate if no given version could be found */
+                if (version_prefix && !startswith(us->version, version_prefix))
+                        continue;
+
+                /* Remember which is the newest non-obsolete, available (and not installed) version, which we declare the "candidate" */
+                if ((us->flags & (UPDATE_INSTALLED|UPDATE_AVAILABLE|UPDATE_OBSOLETE)) == (UPDATE_AVAILABLE)) {
+                        us->flags |= us->flags | UPDATE_NEWEST;
+                        c->candidate = us;
+                        break; /* assume that update sets are always sorted with the newest at top */
+                }
+        }
+
+        /* Newest installed is newer than or equal to candidate? Then suppress the candidate */
+        if (c->newest_installed && c->candidate && strverscmp_improved(c->newest_installed->version, c->candidate->version) >= 0)
+                c->candidate = NULL;
+
         return 0;
 }
 
@@ -900,21 +927,54 @@ static int process_image(
         return 0;
 }
 
+static bool major_version_is_valid(const char *c) {
+
+        if (isempty(c))
+                return false;
+
+        if (string_has_cc(c, NULL))
+                return false;
+
+        if (!utf8_is_valid(c))
+                return false;
+
+        /* does not allow the version to be just '.' or '..', and also should
+           not contain any '/' in the version name */
+        return filename_is_valid(c);
+}
+
 static int verb_list(int argc, char **argv, void *userdata) {
         _cleanup_(loop_device_unrefp) LoopDevice *loop_device = NULL;
         _cleanup_(umount_and_rmdir_and_freep) char *mounted_dir = NULL;
         _cleanup_(context_freep) Context* context = NULL;
+        _cleanup_free_ char *major_version = NULL;
         const char *version;
         int r;
 
         assert(argc <= 2);
         version = argc >= 2 ? argv[1] : NULL;
 
+        if (!arg_major_version) {
+                /* If no major version is specified, we try to take $VERSION_ID from the `os-release` as the
+                 * major version. If there is no $VERSION_ID in os-release then we just keep it `NULL` and
+                 * let the newest image among all update sets be picked as the candidate. */
+
+                r = parse_os_release(arg_root, "VERSION_ID", &major_version);
+                if (r < 0)
+                        return log_error_errno(r, "Failed to parse /etc/os-release: %m");
+                if (!major_version)
+                        log_debug("/etc/os-release lacks VERSION_ID field.");
+        }
+
         r = process_image(/* ro= */ true, &mounted_dir, &loop_device);
         if (r < 0)
                 return r;
 
         r = context_make_online(&context, loop_device ? loop_device->node : NULL);
+        if (r < 0)
+                return r;
+
+        r = context_select_candidate_from_update_sets(context, arg_major_version ? arg_major_version : major_version);
         if (r < 0)
                 return r;
 
@@ -928,15 +988,31 @@ static int verb_check_new(int argc, char **argv, void *userdata) {
         _cleanup_(loop_device_unrefp) LoopDevice *loop_device = NULL;
         _cleanup_(umount_and_rmdir_and_freep) char *mounted_dir = NULL;
         _cleanup_(context_freep) Context* context = NULL;
+        _cleanup_free_ char *major_version = NULL;
         int r;
 
         assert(argc <= 1);
+
+        if (!arg_major_version) {
+                /* The same rule as what we have in the `verb_list()`, so user will see the candidate in the
+                 * list as the new version to be upgraded to */
+
+                r = parse_os_release(arg_root, "VERSION_ID", &major_version);
+                if (r < 0)
+                        return log_error_errno(r, "Failed to parse /etc/os-release: %m");
+                if (!major_version)
+                        log_debug("/etc/os-release lacks VERSION_ID field.");
+        }
 
         r = process_image(/* ro= */ true, &mounted_dir, &loop_device);
         if (r < 0)
                 return r;
 
         r = context_make_online(&context, loop_device ? loop_device->node : NULL);
+        if (r < 0)
+                return r;
+
+        r = context_select_candidate_from_update_sets(context, arg_major_version ? arg_major_version : major_version);
         if (r < 0)
                 return r;
 
@@ -973,6 +1049,7 @@ static int verb_update(int argc, char **argv, void *userdata) {
         _cleanup_(umount_and_rmdir_and_freep) char *mounted_dir = NULL;
         _cleanup_(context_freep) Context* context = NULL;
         _cleanup_free_ char *booted_version = NULL;
+        _cleanup_free_ char *major_version = NULL;
         UpdateSet *applied = NULL;
         const char *version;
         int r;
@@ -989,12 +1066,26 @@ static int verb_update(int argc, char **argv, void *userdata) {
                 if (!booted_version)
                         return log_error_errno(SYNTHETIC_ERRNO(ENODATA), "/etc/os-release lacks IMAGE_VERSION field.");
         }
+        if (!arg_major_version) {
+                /* The same rule as what we have in the `verb_check_new()`. `context_apply()` will take the
+                 * candidate we pick if no `version` is specified */
+
+                r = parse_os_release(arg_root, "VERSION_ID", &major_version);
+                if (r < 0)
+                        return log_error_errno(r, "Failed to parse /etc/os-release: %m");
+                if (!major_version)
+                        log_debug("/etc/os-release lacks VERSION_ID field.");
+        }
 
         r = process_image(/* ro= */ false, &mounted_dir, &loop_device);
         if (r < 0)
                 return r;
 
         r = context_make_online(&context, loop_device ? loop_device->node : NULL);
+        if (r < 0)
+                return r;
+
+        r = context_select_candidate_from_update_sets(context, arg_major_version ? arg_major_version : major_version);
         if (r < 0)
                 return r;
 
@@ -1213,6 +1304,7 @@ static int verb_help(int argc, char **argv, void *userdata) {
                "     --image=PATH         Operate on disk image as filesystem root\n"
                "     --image-policy=POLICY\n"
                "                          Specify disk image dissection policy\n"
+               "     --major-version=NAME Filter candidates with given major-version in name\n"
                "  -m --instances-max=INT  How many instances to maintain\n"
                "     --sync=BOOL          Controls whether to sync data to disk\n"
                "     --verify=BOOL        Force signature verification on or off\n"
@@ -1246,6 +1338,7 @@ static int parse_argv(int argc, char *argv[]) {
                 ARG_IMAGE_POLICY,
                 ARG_REBOOT,
                 ARG_VERIFY,
+                ARG_MAJOR_VERSION,
         };
 
         static const struct option options[] = {
@@ -1263,6 +1356,7 @@ static int parse_argv(int argc, char *argv[]) {
                 { "reboot",            no_argument,       NULL, ARG_REBOOT            },
                 { "component",         required_argument, NULL, 'C'                   },
                 { "verify",            required_argument, NULL, ARG_VERIFY            },
+                { "major-version",     required_argument, NULL, ARG_MAJOR_VERSION     },
                 {}
         };
 
@@ -1363,6 +1457,22 @@ static int parse_argv(int argc, char *argv[]) {
                                 return r;
 
                         arg_verify = b;
+                        break;
+                }
+
+                case ARG_MAJOR_VERSION: {
+                        if (isempty(optarg)) {
+                                arg_major_version = mfree(arg_major_version);
+                                break;
+                        }
+
+                        if (!major_version_is_valid(optarg))
+                                return log_error_errno(SYNTHETIC_ERRNO(EINVAL), "Major version invalid: %s", optarg);
+
+                        r = free_and_strdup_warn(&arg_major_version, optarg);
+                        if (r < 0)
+                                return r;
+
                         break;
                 }
 
