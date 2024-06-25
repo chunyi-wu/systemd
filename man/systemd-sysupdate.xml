@@ -295,6 +295,20 @@
         <xi:include href="version-info.xml" xpointer="v251"/></listitem>
       </varlistentry>
 
+      <varlistentry>
+        <term><option>--next</option></term>
+
+        <listitem><para>Use the predefined transfers for the next major version. If specified, the transfer
+        <filename>*.conf</filename> files are read from <filename>/usr/lib/sysupdate-next.d/*.conf</filename>,
+        <filename>/etc/sysupdate-next.d/*.conf</filename>, and
+        <filename>/run/sysupdate-next.d/*.conf</filename>.<para>
+
+        <para>This option may not be combined with <option>--definitions</option>, and
+        <option>--component=</option>.</para>
+
+        <xi:include href="version-info.xml" xpointer="v256"/></listitem>
+      </varlistentry>
+
       <xi:include href="standard-options.xml" xpointer="no-pager" />
       <xi:include href="standard-options.xml" xpointer="no-legend" />
       <xi:include href="standard-options.xml" xpointer="json" />

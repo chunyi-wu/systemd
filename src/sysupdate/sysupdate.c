@@ -47,6 +47,7 @@ static bool arg_reboot = false;
 static char *arg_component = NULL;
 static int arg_verify = -1;
 static ImagePolicy *arg_image_policy = NULL;
+static bool arg_next = false;
 
 STATIC_DESTRUCTOR_REGISTER(arg_definitions, freep);
 STATIC_DESTRUCTOR_REGISTER(arg_root, freep);
@@ -124,6 +125,8 @@ static int context_read_definitions(
                 }
 
                 r = conf_files_list_strv(&files, ".conf", root, CONF_FILES_REGULAR|CONF_FILES_FILTER_MASKED, (const char**) n);
+        } else if (arg_next) {
+                r = conf_files_list_strv(&files, ".conf", root, CONF_FILES_REGULAR|CONF_FILES_FILTER_MASKED, (const char**) CONF_PATHS_STRV("sysupdate-next.d"));
         } else
                 r = conf_files_list_strv(&files, ".conf", root, CONF_FILES_REGULAR|CONF_FILES_FILTER_MASKED, (const char**) CONF_PATHS_STRV("sysupdate.d"));
         if (r < 0)
@@ -1209,6 +1212,7 @@ static int verb_help(int argc, char **argv, void *userdata) {
                "\n%3$sOptions:%4$s\n"
                "  -C --component=NAME     Select component to update\n"
                "     --definitions=DIR    Find transfer definitions in specified directory\n"
+               "     --next               Use transfer definitions for the next major version\n"
                "     --root=PATH          Operate on an alternate filesystem root\n"
                "     --image=PATH         Operate on disk image as filesystem root\n"
                "     --image-policy=POLICY\n"
@@ -1246,6 +1250,7 @@ static int parse_argv(int argc, char *argv[]) {
                 ARG_IMAGE_POLICY,
                 ARG_REBOOT,
                 ARG_VERIFY,
+                ARG_NEXT,
         };
 
         static const struct option options[] = {
@@ -1263,6 +1268,7 @@ static int parse_argv(int argc, char *argv[]) {
                 { "reboot",            no_argument,       NULL, ARG_REBOOT            },
                 { "component",         required_argument, NULL, 'C'                   },
                 { "verify",            required_argument, NULL, ARG_VERIFY            },
+                { "next",              no_argument,       NULL, ARG_NEXT              },
                 {}
         };
 
@@ -1363,6 +1369,11 @@ static int parse_argv(int argc, char *argv[]) {
                                 return r;
 
                         arg_verify = b;
+                        break;
+                }
+
+                case ARG_NEXT: {
+                        arg_next = true;
                         break;
                 }
 
